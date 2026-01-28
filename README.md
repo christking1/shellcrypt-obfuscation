@@ -7,12 +7,12 @@ Verktyget används ofta i säkerhetsprojekt för att dölja shellcode så att de
 
 ## Vad verktyget gör
 
- Läser rå shellcode från en binär fil t.ex raw.bin
- XOR:ar varje byte med en given nyckel (nyckeln upprepas om den är kortare än shellcoden)
- Skapar utdata i ett av tre format:
- raw (krypterade bytes direkt till fil)
- python (bytearray i Python-syntax)
-c (C-array med unsigned char och längd)
+Läser rå shellcode från binär fil (t.ex. raw.bin)
+XOR:ar varje byte med given nyckel (nyckeln upprepas vid behov)
+Skapar utdata i ett av tre format:
+raw (krypterade bytes direkt till fil)
+python (bytearray-syntax)
+c (unsigned char-array + längd)
 
 ## Hur man kör verktyget
 
