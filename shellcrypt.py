@@ -1,10 +1,12 @@
-# shellcrypt.py - shellcode-xor 
+# shellcrypt.py - shellcode XOR encryptor
 
 import argparse
 import sys
+import os
+
 
 def xor_dra_på(shellcode: bytes, nyckel: bytes) -> bytes:
-    # xor ar allting, nyckeln loopar om den är kortare än shellcode
+    """XOR-krypterar shellcode med nyckel (nyckeln loopar vid behov)."""
     result = bytearray()
     for i in range(len(shellcode)):
         result.append(shellcode[i] ^ nyckel[i % len(nyckel)])
@@ -12,113 +14,156 @@ def xor_dra_på(shellcode: bytes, nyckel: bytes) -> bytes:
 
 
 def gör_till_c_array(bytes_grej: bytes, namn="buf") -> str:
-    # typ sån där C-array som många malware använder
-    lines = [f"unsigned char {namn}[] = {{"]
-    for i, byte in enumerate(bytes_grej):
-        if i % 12 == 0 and i != 0:
-            lines[-1] += ","
-            lines.append("    ")
-        else:
-            if i > 0:
-                lines[-1] += ", "
-        lines[-1] += f"0x{byte:02x}"
-    
-    lines[-1] += " };"
-    lines.append(f"unsigned int {namn}_len = {len(bytes_grej)};")  # längden behövs nästan alltid
-    return "\n".join(lines)
+    """Skapar en snygg C-style array-sträng."""
+    if not bytes_grej:
+        return f"unsigned char {namn}[] = {{ }};\nunsigned int {namn}_len = 0;"
+
+    hex_bytes = []
+    for i, b in enumerate(bytes_grej):
+        if i % 12 == 0 and i > 0:
+            hex_bytes.append("\n    ")
+        hex_bytes.append(f"0x{b:02x}")
+        if i < len(bytes_grej) - 1:
+            hex_bytes.append(", ")
+
+    content = f"unsigned char {namn}[] = {{\n    " + "".join(hex_bytes) + "\n}};\n"
+    content += f"unsigned int {namn}_len = {len(bytes_grej)};"
+    return content
 
 
 def gör_till_python_array(bytes_grej: bytes, namn="buf") -> str:
-    # python grej, bytearray som man kan kopiera in i loadern
-    lines = [f"{namn} = bytearray(["]
-    for i, byte in enumerate(bytes_grej):
-        if i % 12 == 0 and i != 0:
-            lines[-1] += ","
-            lines.append("    ")
-        else:
-            if i > 0:
-                lines[-1] += ", "
-        lines[-1] += f"0x{byte:02x}"
-    lines[-1] += "])"
-    return "\n".join(lines)
+    """Skapar en snygg Python bytearray-sträng."""
+    if not bytes_grej:
+        return f"{namn} = bytearray([])"
+
+    hex_bytes = []
+    for i, b in enumerate(bytes_grej):
+        if i % 12 == 0 and i > 0:
+            hex_bytes.append("\n    ")
+        hex_bytes.append(f"0x{b:02x}")
+        if i < len(bytes_grej) - 1:
+            hex_bytes.append(", ")
+
+    return f"{namn} = bytearray([\n    " + "".join(hex_bytes) + "\n])"
 
 
 def fixa_nyckel(nyckel_str: str) -> bytes:
-    # tar emot typ 0xAA eller deadbeef eller AA BB eller vanlig text
+    """Konverterar nyckel från hex-sträng eller vanlig text till bytes."""
     nyckel_str = nyckel_str.lower().replace("0x", "").replace(" ", "").replace(",", "")
     try:
         return bytes.fromhex(nyckel_str)
-    except:
-        # om det inte är hex så blir det ascii bytes istället
+    except ValueError:
         return nyckel_str.encode("utf-8")
 
 
-def main():
-    print("=== shellcrypt v1.0 - göm din shellcode===")
-    print("   (koden funkar\n")
+def skapa_testfil(filnamn="raw.bin"):
+    """Skapar en liten test-shellcode-fil om den inte finns."""
+    test_bytes = bytes([
+        0x90, 0x90, 0xCC,              # NOP NOP INT3
+        0xFC, 0x48, 0x83, 0xE4, 0xF0,  # vanliga shellcode-start bytes
+    ])
+    with open(filnamn, "wb") as f:
+        f.write(test_bytes)
+    print(f"[*] Skapade testfil '{filnamn}' med {len(test_bytes)} bytes för felsökning")
 
-    parser = argparse.ArgumentParser(description="XOR:ar shellcode")
+
+def main():
+    print("=== shellcrypt v1.2 - göm din shellcode ===\n")
+
+    parser = argparse.ArgumentParser(description="XOR-obfuskerar shellcode och skapar C/Python/raw output.")
     
-    parser.add_argument("--input", required=True, help="filen med rå shellcode (typ raw.bin)")
-    parser.add_argument("--out", help="vart ska resultatet sparas? (annars bara print)")
-    parser.add_argument("--key", required=True, help="nyckeln, typ 0xAA eller deadbeef eller mysecret")
+    parser.add_argument("--in", "--input", required=True, dest="input",
+                        help="Inputfil med rå shellcode (binär fil, t.ex. raw.bin)")
+    parser.add_argument("--out", 
+                        help="Outputfil (annars skrivs resultatet ut i terminalen)")
+    parser.add_argument("--key", required=True, 
+                        help="XOR-nyckel, t.ex. AA, 0xAA, deadbeef, mysecret")
     parser.add_argument("--format", choices=["raw", "python", "c"], default="c",
-                        help="typ av output: c (vanligast), python eller raw")
-    parser.add_argument("--var", default="buf", help="vad ska arrayen heta i C/python? (default buf)")
+                        help="Outputformat: c (standard), python eller raw")
+    parser.add_argument("--var", default="buf",
+                        help="Namn på arrayen i C eller Python (standard: buf)")
+    parser.add_argument("--test", action="store_true",
+                        help="Skapar automatiskt en liten testfil 'raw.bin' om den inte finns")
 
     args = parser.parse_args()
 
-    # läs in shellcoden
+    # Skapa testfil om --test är satt och filen saknas
+    if args.test and not os.path.exists(args.input):
+        skapa_testfil(args.input)
+
+    # Läs shellcode
     try:
         with open(args.input, "rb") as f:
             original = f.read()
+        
+        if not original:
+            print(f"[-] FEL: Filen '{args.input}' är tom (0 bytes).")
+            print("    Tips för Windows:")
+            print("    1. Kör scriptet med --test för att skapa en liten testfil automatiskt")
+            print("    2. Eller skapa manuellt i Python:")
+            print("       with open('raw.bin', 'wb') as f: f.write(bytes([0x90, 0x90, 0xCC]))")
+            print("    3. Eller i PowerShell:")
+            print("       [byte[]]$b = 0x90,0x90,0xCC; [IO.File]::WriteAllBytes('raw.bin',$b)")
+            sys.exit(1)
+        
         print(f"[+] Läste {len(original)} bytes från {args.input}")
+    except FileNotFoundError:
+        print(f"[-] FEL: Filen '{args.input}' hittades inte.")
+        print("    Tips: Kör med --test för att skapa en testfil automatiskt")
+        sys.exit(1)
     except Exception as e:
-        print(f"[-] Hittade inte filen eller nåt sket sig: {args.input}")
-        print(f"    Fel: {e}")
+        print(f"[-] Kunde inte läsa filen '{args.input}': {e}")
         sys.exit(1)
 
-    # fixa nyckeln
+    # Fixa nyckel
     try:
         key_bytes = fixa_nyckel(args.key)
+        if not key_bytes:
+            print("[-] FEL: Nyckeln blev tom.")
+            sys.exit(1)
         print(f"[+] Nyckel: {key_bytes.hex()} ({len(key_bytes)} bytes)")
-    except:
-        print("[-] Nyckeln ser ok ut... typ 0xAA, AA, deadbeef")
+    except Exception as e:
+        print(f"[-] Kunde inte tolka nyckeln '{args.key}': {e}")
         sys.exit(1)
 
-    # kör xor 
+    # XOR:a
     encrypted = xor_dra_på(original, key_bytes)
-    print(f"[+] XOR klart! {len(encrypted)} bytes nu")
+    print(f"[+] XOR klar – {len(encrypted)} bytes")
 
-    # välj format och gör output
+    # Skapa innehåll
     if args.format == "c":
-        content = gör_till_c_array(encrypted, args.var).encode()
+        content = gör_till_c_array(encrypted, args.var)
         binary = False
-        print("[+] Gjorde C-array, perfekt för loaders")
+        print("[+] Skapade C-array")
     elif args.format == "python":
-        content = gör_till_python_array(encrypted, args.var).encode()
+        content = gör_till_python_array(encrypted, args.var)
         binary = False
-        print("[+] Gjorde python bytearray, nice")
+        print("[+] Skapade Python bytearray")
     else:  # raw
         content = encrypted
         binary = True
-        print("[+] Rå bytes, bara encryptad")
+        print("[+] Skapade rå binär output")
 
-    # skriv eller printa
+    # Spara eller skriv ut
     if args.out:
         mode = "wb" if binary else "w"
         try:
             with open(args.out, mode) as f:
-                f.write(content)
-            print(f"[+] Sparade till: {args.out}")
+                if binary:
+                    f.write(content)
+                else:
+                    f.write(content)
+            print(f"[+] Sparad till: {args.out}")
         except Exception as e:
-            print(f"[-] Kunde inte skriva till {args.out}: {e}")
+            print(f"[-] Kunde inte skriva till '{args.out}': {e}")
             sys.exit(1)
     else:
+        print("\nResultat:\n")
         if binary:
-            sys.stdout.buffer.write(content)
+            # För raw – visa hex istället för att dumpa binärt till terminal
+            print(" ".join(f"{b:02x}" for b in content))
         else:
-            print(content.decode(errors="ignore"))
+            print(content)
 
     print("\nKlar!")
 
